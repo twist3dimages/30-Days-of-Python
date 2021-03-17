@@ -6,6 +6,3 @@ For the next 30 days, learn the Python Programming language. Watch the official 
 
 > ![#f03c15](https://placehold.it/15/f03c15/000000?text=+) 30 Days of Python using Python 3.6 has been moved to [here](https://github.com/codingforentrepreneurs/30-Days-of-Python-3.6). Happy Coding!
 
-
-
-### Code & Lessons Coming Soon.
