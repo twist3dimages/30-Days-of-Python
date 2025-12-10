@@ -60,20 +60,39 @@ jobs:
             if [ -f "Pipfile" ]; then
               echo "Found Pipfile, updating dependencies..."
               
-              # Clean any existing virtual environment
-              pipenv --rm 2>/dev/null || true
+              # Set environment variables for non-interactive pipenv
+              export PIPENV_VENV_IN_PROJECT=1
+              export PIPENV_YES=1
               
-              # Install dependencies (try with dev packages first, fallback to regular)
-              if ! pipenv install --dev 2>/dev/null; then
-                pipenv install 2>/dev/null || echo "Warning: Failed to install dependencies"
+              # Clean any existing virtual environment
+              pipenv --rm || true
+              rm -rf .venv
+              
+              # Try to install dependencies to set up the environment
+              # First try respecting the Pipfile python version
+              echo "Attempting pipenv install..."
+              if ! pipenv install --dev; then
+                echo "Standard install failed (likely python version mismatch)."
+                echo "Retrying with current python: $(which python3)..."
+                # Fallback: Force using the current python version
+                pipenv install --dev --python $(which python3) || {
+                  echo "Error: Failed to create pipenv environment."
+                  cd "$INITIAL_DIR" || true
+                  continue
+                }
               fi
               
               # Update all packages
-              if pipenv update 2>/dev/null; then
+              echo "Running pipenv update..."
+              if pipenv update; then
+                # Ensure lock file is synced/generated
+                echo "Syncing lock file..."
+                pipenv lock
+                
                 # Check if files changed
                 if [ -f "Pipfile.lock" ]; then
-                  git add Pipfile Pipfile.lock 2>/dev/null
-                  UPDATED_COUNT=$((UPDATED_COUNT + 2))
+                  git add Pipfile Pipfile.lock
+                  UPDATED_COUNT=$((UPDATED_COUNT + 1))
                   echo "✓ Updated Pipfile and Pipfile.lock"
                 fi
               else
@@ -81,7 +100,8 @@ jobs:
               fi
               
               # Clean up virtual environment
-              pipenv --rm 2>/dev/null || true
+              pipenv --rm || true
+              rm -rf .venv
             fi
             
             # Handle requirements.txt
@@ -93,7 +113,7 @@ jobs:
               VENV_PATH="/tmp/venv_${VENV_NAME}"
               
               # Create temporary virtual environment
-              python3 -m venv "$VENV_PATH" 2>/dev/null || {
+              python3 -m venv "$VENV_PATH" || {
                 echo "Warning: Failed to create virtual environment"
                 cd "$INITIAL_DIR" || true
                 continue
@@ -102,29 +122,34 @@ jobs:
               source "$VENV_PATH/bin/activate"
               
               # Upgrade pip
-              pip install --quiet --upgrade pip 2>/dev/null || true
+              pip install --quiet --upgrade pip || true
               
               # Check if requirements.in exists (for pip-compile workflow)
               if [ -f "requirements.in" ]; then
-                pip install --quiet pip-tools 2>/dev/null || true
-                if pip-compile --upgrade requirements.in 2>/dev/null; then
-                  git add requirements.txt requirements.in 2>/dev/null
-                  UPDATED_COUNT=$((UPDATED_COUNT + 2))
+                pip install --quiet pip-tools || true
+                echo "Compiling requirements.in..."
+                if pip-compile --upgrade requirements.in; then
+                  git add requirements.txt requirements.in
+                  UPDATED_COUNT=$((UPDATED_COUNT + 1))
                   echo "✓ Updated requirements.txt from requirements.in"
+                else
+                  echo "Warning: Failed to compile requirements.in"
                 fi
               else
                 # Install current requirements
-                pip install --quiet -r requirements.txt 2>/dev/null || true
+                echo "Installing current requirements..."
+                pip install --quiet -r requirements.txt || echo "Warning: Failed to install initial requirements"
                 
                 # Try to update packages
-                pip install --quiet --upgrade -r requirements.txt 2>/dev/null || true
+                echo "Checking for updates..."
+                pip install --quiet --upgrade -r requirements.txt || echo "Warning: Failed to upgrade requirements"
                 
                 # Generate new requirements.txt
-                pip freeze > requirements.txt.new 2>/dev/null
+                pip freeze > requirements.txt.new
                 
                 if [ -f "requirements.txt.new" ] && ! diff -q requirements.txt requirements.txt.new > /dev/null 2>&1; then
                   mv requirements.txt.new requirements.txt
-                  git add requirements.txt 2>/dev/null
+                  git add requirements.txt
                   UPDATED_COUNT=$((UPDATED_COUNT + 1))
                   echo "✓ Updated requirements.txt"
                 else
@@ -133,8 +158,8 @@ jobs:
                 fi
               fi
               
-              deactivate 2>/dev/null || true
-              rm -rf "$VENV_PATH" 2>/dev/null || true
+              deactivate || true
+              rm -rf "$VENV_PATH" || true
             fi
             
             cd "$INITIAL_DIR" || true
