@@ -28,6 +28,7 @@ jobs:
       # Step 3: Install Pipenv and pip-tools
       - name: Install dependency tools
         run: |
+          pip install --upgrade pip setuptools wheel
           pip install pipenv pip-tools
 
       # Step 4: Configure Git
@@ -72,6 +73,7 @@ jobs:
               
               # Clean any existing virtual environment
               pipenv --rm || true
+              pipenv --clear || true
               rm -rf .venv
               
               # Try to install dependencies to set up the environment
@@ -82,7 +84,7 @@ jobs:
                 echo "Standard install failed (likely python version mismatch)."
                 echo "Retrying with current python: $(which python3)..."
                 # Fallback: Force using the current python version
-                pipenv install --dev --python $(which python3) --skip-lock || {
+                pipenv install --dev --python $(which python3) --skip-lock --clear || {
                   echo "Error: Failed to create pipenv environment."
                   cd "$INITIAL_DIR" || true
                   continue
@@ -91,7 +93,7 @@ jobs:
               
               # Update all packages
               echo "Running pipenv update..."
-              if pipenv update; then
+              if pipenv update --clear; then
                 # Ensure lock file is synced/generated
                 echo "Syncing lock file..."
                 pipenv lock
