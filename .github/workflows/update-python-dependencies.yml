@@ -23,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6.0.0
         with:
-          python-version: '3.11'  # Use a stable Python version
+          python-version: '3.13'  # Use a stable Python version
 
       # Step 3: Install Pipenv and pip-tools
       - name: Install dependency tools
@@ -60,10 +60,10 @@ jobs:
             if [ -f "Pipfile" ]; then
               echo "Found Pipfile, updating dependencies..."
               
-              # Update python_version in Pipfile to match runner (3.11)
+              # Update python_version in Pipfile to match runner (3.13)
               if grep -q "python_version" Pipfile; then
-                  echo "Updating Python version in Pipfile to 3.11..."
-                  sed -i 's/python_version = ".*"/python_version = "3.11"/' Pipfile
+                  echo "Updating Python version in Pipfile to 3.13..."
+                  sed -i 's/python_version = ".*"/python_version = "3.13"/' Pipfile
               fi
               
               # Set environment variables for non-interactive pipenv
