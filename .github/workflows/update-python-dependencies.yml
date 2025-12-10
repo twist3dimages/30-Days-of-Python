@@ -47,11 +47,15 @@ jobs:
       - name: Update all Python dependencies
         id: update_deps
         run: |
-          set +e
+          # Exit immediately if a command exits with a non-zero status
+          set -e
           UPDATED_COUNT=0
           INITIAL_DIR=$(pwd)
           
-          # Find all directories with Pipfile or requirements.txt
+          # Use a temporary file to store the list of directories
+          # This avoids pipe subshell issues with 'set -e'
+          find . -type f \( -name "Pipfile" -o -name "requirements.txt" \) -not -path "*/\.*" -not -path "*/node_modules/*" -exec dirname {} \; | sort -u > directories.txt
+          
           while IFS= read -r dir; do
             if [ -z "$dir" ]; then
               continue
@@ -61,7 +65,7 @@ jobs:
             echo "Processing: $dir"
             echo "========================================="
             
-            cd "$INITIAL_DIR/$dir" || continue
+            cd "$INITIAL_DIR/$dir"
             
             # Handle Pipfile
             if [ -f "Pipfile" ]; then
@@ -83,18 +87,20 @@ jobs:
               rm -rf .venv
               
               # Try to install dependencies to set up the environment
-              # First try respecting the Pipfile python version
               echo "Attempting pipenv install..."
+              
+              # We use a custom install process to ensure build deps are present
+              # 1. Create the venv explicitly first
+              python3 -m venv .venv
+              
+              # 2. Install build tools INSIDE the venv
+              ./.venv/bin/pip install --upgrade pip setuptools wheel
+              
+              # 3. Use pipenv to install dependencies using this venv
               # Use --skip-lock because we just modified Pipfile (potentially) so lock is stale
               if ! pipenv install --dev --skip-lock; then
-                echo "Standard install failed (likely python version mismatch)."
-                echo "Retrying with current python: $(which python3)..."
-                # Fallback: Force using the current python version
-                pipenv install --dev --python $(which python3) --skip-lock --clear || {
-                  echo "Error: Failed to create pipenv environment."
-                  cd "$INITIAL_DIR" || true
-                  continue
-                }
+                echo "Standard install failed. Stopping workflow."
+                exit 1
               fi
               
               # Update all packages
@@ -111,7 +117,8 @@ jobs:
                   echo "✓ Updated Pipfile and Pipfile.lock"
                 fi
               else
-                echo "Warning: Failed to update Pipfile dependencies"
+                echo "Failed to update Pipfile dependencies. Stopping workflow."
+                exit 1
               fi
               
               # Clean up virtual environment
@@ -128,36 +135,39 @@ jobs:
               VENV_PATH="/tmp/venv_${VENV_NAME}"
               
               # Create temporary virtual environment
-              python3 -m venv "$VENV_PATH" || {
-                echo "Warning: Failed to create virtual environment"
-                cd "$INITIAL_DIR" || true
-                continue
-              }
+              python3 -m venv "$VENV_PATH"
               
               source "$VENV_PATH/bin/activate"
               
-              # Upgrade pip
-              pip install --quiet --upgrade pip || true
+              # Upgrade pip and build tools
+              pip install --quiet --upgrade pip setuptools wheel
               
               # Check if requirements.in exists (for pip-compile workflow)
               if [ -f "requirements.in" ]; then
-                pip install --quiet pip-tools || true
+                pip install --quiet pip-tools
                 echo "Compiling requirements.in..."
                 if pip-compile --upgrade requirements.in; then
                   git add requirements.txt requirements.in
                   UPDATED_COUNT=$((UPDATED_COUNT + 1))
                   echo "✓ Updated requirements.txt from requirements.in"
                 else
-                  echo "Warning: Failed to compile requirements.in"
+                  echo "Failed to compile requirements.in. Stopping workflow."
+                  exit 1
                 fi
               else
                 # Install current requirements
                 echo "Installing current requirements..."
-                pip install --quiet -r requirements.txt || echo "Warning: Failed to install initial requirements"
+                if ! pip install --quiet -r requirements.txt; then
+                   echo "Failed to install initial requirements. Stopping workflow."
+                   exit 1
+                fi
                 
                 # Try to update packages
                 echo "Checking for updates..."
-                pip install --quiet --upgrade -r requirements.txt || echo "Warning: Failed to upgrade requirements"
+                if ! pip install --quiet --upgrade -r requirements.txt; then
+                   echo "Failed to upgrade requirements. Stopping workflow."
+                   exit 1
+                fi
                 
                 # Generate new requirements.txt
                 pip freeze > requirements.txt.new
@@ -173,13 +183,13 @@ jobs:
                 fi
               fi
               
-              deactivate || true
-              rm -rf "$VENV_PATH" || true
+              deactivate
+              rm -rf "$VENV_PATH"
             fi
             
-            cd "$INITIAL_DIR" || true
+            cd "$INITIAL_DIR"
             echo ""
-          done < <(find . -type f \( -name "Pipfile" -o -name "requirements.txt" \) -not -path "*/\.*" -not -path "*/node_modules/*" -exec dirname {} \; | sort -u)
+          done < directories.txt
           
           # Set output variables
           if [ $UPDATED_COUNT -gt 0 ]; then
