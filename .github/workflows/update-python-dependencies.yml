@@ -25,19 +25,25 @@ jobs:
         with:
           python-version: '3.13'  # Use a stable Python version
 
-      # Step 3: Install Pipenv and pip-tools
+      # Step 3: Install system dependencies
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxslt-dev zlib1g-dev
+
+      # Step 4: Install Pipenv and pip-tools
       - name: Install dependency tools
         run: |
           pip install --upgrade pip setuptools wheel
           pip install pipenv pip-tools
 
-      # Step 4: Configure Git
+      # Step 5: Configure Git
       - name: Configure Git
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-      # Step 5: Find and update all dependency files
+      # Step 6: Find and update all dependency files
       - name: Update all Python dependencies
         id: update_deps
         run: |
@@ -186,7 +192,7 @@ jobs:
             echo "No dependency files were updated"
           fi
 
-      # Step 6: Commit the changes and set an output if a commit was made
+      # Step 7: Commit the changes and set an output if a commit was made
       - name: Commit changes
         id: commit
         run: |
@@ -206,7 +212,7 @@ jobs:
             echo "No dependencies were updated"
           fi
 
-      # Step 7: Push changes (only if a commit was made)
+      # Step 8: Push changes (only if a commit was made)
       - name: Push changes
         if: steps.commit.outputs.commit == 'true'
         run: git push origin main
