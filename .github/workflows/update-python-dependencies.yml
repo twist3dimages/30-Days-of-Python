@@ -1,0 +1,178 @@
+name: Update Python Dependencies
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Runs every Sunday at midnight UTC
+  workflow_dispatch:    # Allows manual triggering of the workflow
+
+permissions:
+  contents: write        # Allows the workflow to commit and push changes
+
+jobs:
+  update_dependencies:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.0
+        with:
+          fetch-depth: 0  # Ensure the entire history is fetched
+
+      # Step 2: Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v6.0.0
+        with:
+          python-version: '3.11'  # Use a stable Python version
+
+      # Step 3: Install Pipenv and pip-tools
+      - name: Install dependency tools
+        run: |
+          pip install pipenv pip-tools
+
+      # Step 4: Configure Git
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      # Step 5: Find and update all dependency files
+      - name: Update all Python dependencies
+        id: update_deps
+        run: |
+          set +e
+          UPDATED_COUNT=0
+          INITIAL_DIR=$(pwd)
+          
+          # Find all directories with Pipfile or requirements.txt
+          while IFS= read -r dir; do
+            if [ -z "$dir" ]; then
+              continue
+            fi
+            
+            echo "========================================="
+            echo "Processing: $dir"
+            echo "========================================="
+            
+            cd "$INITIAL_DIR/$dir" || continue
+            
+            # Handle Pipfile
+            if [ -f "Pipfile" ]; then
+              echo "Found Pipfile, updating dependencies..."
+              
+              # Clean any existing virtual environment
+              pipenv --rm 2>/dev/null || true
+              
+              # Install dependencies (try with dev packages first, fallback to regular)
+              if ! pipenv install --dev 2>/dev/null; then
+                pipenv install 2>/dev/null || echo "Warning: Failed to install dependencies"
+              fi
+              
+              # Update all packages
+              if pipenv update 2>/dev/null; then
+                # Check if files changed
+                if [ -f "Pipfile.lock" ]; then
+                  git add Pipfile Pipfile.lock 2>/dev/null
+                  UPDATED_COUNT=$((UPDATED_COUNT + 2))
+                  echo "✓ Updated Pipfile and Pipfile.lock"
+                fi
+              else
+                echo "Warning: Failed to update Pipfile dependencies"
+              fi
+              
+              # Clean up virtual environment
+              pipenv --rm 2>/dev/null || true
+            fi
+            
+            # Handle requirements.txt
+            if [ -f "requirements.txt" ]; then
+              echo "Found requirements.txt, updating dependencies..."
+              
+              # Create a unique virtual environment name
+              VENV_NAME=$(echo "$dir" | tr '/' '_' | tr ' ' '_' | sed 's/^\._//')
+              VENV_PATH="/tmp/venv_${VENV_NAME}"
+              
+              # Create temporary virtual environment
+              python3 -m venv "$VENV_PATH" 2>/dev/null || {
+                echo "Warning: Failed to create virtual environment"
+                cd "$INITIAL_DIR" || true
+                continue
+              }
+              
+              source "$VENV_PATH/bin/activate"
+              
+              # Upgrade pip
+              pip install --quiet --upgrade pip 2>/dev/null || true
+              
+              # Check if requirements.in exists (for pip-compile workflow)
+              if [ -f "requirements.in" ]; then
+                pip install --quiet pip-tools 2>/dev/null || true
+                if pip-compile --upgrade requirements.in 2>/dev/null; then
+                  git add requirements.txt requirements.in 2>/dev/null
+                  UPDATED_COUNT=$((UPDATED_COUNT + 2))
+                  echo "✓ Updated requirements.txt from requirements.in"
+                fi
+              else
+                # Install current requirements
+                pip install --quiet -r requirements.txt 2>/dev/null || true
+                
+                # Try to update packages
+                pip install --quiet --upgrade -r requirements.txt 2>/dev/null || true
+                
+                # Generate new requirements.txt
+                pip freeze > requirements.txt.new 2>/dev/null
+                
+                if [ -f "requirements.txt.new" ] && ! diff -q requirements.txt requirements.txt.new > /dev/null 2>&1; then
+                  mv requirements.txt.new requirements.txt
+                  git add requirements.txt 2>/dev/null
+                  UPDATED_COUNT=$((UPDATED_COUNT + 1))
+                  echo "✓ Updated requirements.txt"
+                else
+                  rm -f requirements.txt.new
+                  echo "No updates needed for requirements.txt"
+                fi
+              fi
+              
+              deactivate 2>/dev/null || true
+              rm -rf "$VENV_PATH" 2>/dev/null || true
+            fi
+            
+            cd "$INITIAL_DIR" || true
+            echo ""
+          done < <(find . -type f \( -name "Pipfile" -o -name "requirements.txt" \) -not -path "*/\.*" -not -path "*/node_modules/*" -exec dirname {} \; | sort -u)
+          
+          # Set output variables
+          if [ $UPDATED_COUNT -gt 0 ]; then
+            echo "updated=true" >> $GITHUB_OUTPUT
+            echo "files_count=$UPDATED_COUNT" >> $GITHUB_OUTPUT
+            echo "Successfully updated $UPDATED_COUNT dependency files"
+          else
+            echo "updated=false" >> $GITHUB_OUTPUT
+            echo "files_count=0" >> $GITHUB_OUTPUT
+            echo "No dependency files were updated"
+          fi
+
+      # Step 6: Commit the changes and set an output if a commit was made
+      - name: Commit changes
+        id: commit
+        run: |
+          if [ "${{ steps.update_deps.outputs.updated }}" == "true" ]; then
+            # Check if there are any staged changes
+            git add -A
+            if ! git diff --staged --quiet; then
+              git commit -m "Automated update of Python dependencies across all folders (${{ steps.update_deps.outputs.files_count }} files updated)"
+              echo "commit=true" >> $GITHUB_OUTPUT
+              echo "Committed changes to ${{ steps.update_deps.outputs.files_count }} files"
+            else
+              echo "commit=false" >> $GITHUB_OUTPUT
+              echo "No changes to commit (files may have been already up to date)"
+            fi
+          else
+            echo "commit=false" >> $GITHUB_OUTPUT
+            echo "No dependencies were updated"
+          fi
+
+      # Step 7: Push changes (only if a commit was made)
+      - name: Push changes
+        if: steps.commit.outputs.commit == 'true'
+        run: git push origin main
